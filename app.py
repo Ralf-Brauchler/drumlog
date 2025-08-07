@@ -35,7 +35,7 @@ def login_form():
                 st.session_state.logged_in = True
                 st.session_state.username = username
                 st.success(f"Willkommen, {username}!")
-                st.experimental_rerun()
+                st.stop()  # Stoppt die Ausführung nach Login
             else:
                 st.error("Falscher Benutzername oder Passwort.")
 
