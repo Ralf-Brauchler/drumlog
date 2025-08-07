@@ -4,12 +4,19 @@ import os
 from datetime import date
 import plotly.express as px
 
-# --- Benutzerverwaltung (Zugangsdaten im Code) ---
-USERS = {
-    "ralf": "hsetoal45jstencw4",
-    "gast": "gast123",
-    # weitere Benutzer: "benutzername": "passwort"
-}
+# Benutzerdaten importieren
+try:
+    # Versuche zuerst Streamlit Secrets (für Cloud-Deployment)
+    if hasattr(st, 'secrets') and 'users' in st.secrets:
+        USERS = dict(st.secrets.users)
+    else:
+        # Fallback: Lokale users.py Datei
+        from users import USERS
+except ImportError:
+    # Fallback für den Fall, dass users.py nicht existiert
+    USERS = {
+        "demo": "demo123"
+    }
 
 st.set_page_config(
     page_title="Drumlog - Dein Übungstagebuch",

@@ -40,3 +40,6 @@ Thumbs.db
 
 # Data files (optional - du kannst sie auch committen, wenn du die Daten teilen möchtest)
 # practice_log.csv
+
+# Benutzerdaten (sollten nicht ins Repository)
+users.py
