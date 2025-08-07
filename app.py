@@ -87,42 +87,80 @@ elif abgeschickt:
 if os.path.exists(DATA_FILE):
     try:
         df = pd.read_csv(DATA_FILE)
+        
+        # Validiere die Spaltenstruktur
+        required_columns = ['Datum', 'Übung/Song', 'Minuten', 'BPM', 'Notizen']
+        if not all(col in df.columns for col in required_columns):
+            st.error('❌ Die hochgeladene CSV-Datei hat nicht das erwartete Format. Bitte verwende eine Datei mit den Spalten: Datum, Übung/Song, Minuten, BPM, Notizen')
+            st.stop()
+        
         if not df.empty:
+            # Validiere Datentypen
+            try:
+                df['Minuten'] = pd.to_numeric(df['Minuten'], errors='coerce')
+                df['BPM'] = pd.to_numeric(df['BPM'], errors='coerce')
+                df['Datum'] = pd.to_datetime(df['Datum'], errors='coerce')
+                
+                # Entferne Zeilen mit ungültigen Daten
+                df = df.dropna(subset=['Datum', 'Minuten', 'BPM'])
+                
+                if df.empty:
+                    st.warning('⚠️ Nach der Bereinigung sind keine gültigen Daten vorhanden.')
+                    st.stop()
+                    
+            except Exception as e:
+                st.error(f'❌ Fehler beim Validieren der Daten: {str(e)}')
+                st.stop()
+            
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric("Gesamtübungszeit", f"{df['Minuten'].sum()} Min")
+                st.metric("Gesamtübungszeit", f"{df['Minuten'].sum():.0f} Min")
             with col2:
                 st.metric("Anzahl Einträge", len(df))
             with col3:
                 st.metric("Durchschnitt BPM", f"{df['BPM'].mean():.0f}")
+            
             st.subheader('📊 Deine bisherigen Einträge')
             st.dataframe(df, use_container_width=True)
-            df['Datum'] = pd.to_datetime(df['Datum'])
-            st.subheader('📈 Übungszeit pro Tag')
-            zeit_pro_tag = df.groupby('Datum')['Minuten'].sum().reset_index()
-            fig1 = px.bar(zeit_pro_tag, x='Datum', y='Minuten', 
-                          labels={'Minuten': 'Minuten', 'Datum': 'Datum'},
-                          color_discrete_sequence=['#FF6B6B'])
-            fig1.update_layout(showlegend=False)
-            st.plotly_chart(fig1, use_container_width=True)
-            st.subheader('🎵 BPM-Fortschritt pro Übung/Song')
-            if len(df['Übung/Song'].unique()) > 0:
-                fig2 = px.line(df, x='Datum', y='BPM', color='Übung/Song', 
-                              markers=True, labels={'BPM': 'Tempo (BPM)', 'Datum': 'Datum', 'Übung/Song': 'Übung/Song'})
-                st.plotly_chart(fig2, use_container_width=True)
+            
+            # Diagramme nur anzeigen, wenn genügend Daten vorhanden sind
+            if len(df) > 0:
+                st.subheader('📈 Übungszeit pro Tag')
+                zeit_pro_tag = df.groupby('Datum')['Minuten'].sum().reset_index()
+                if not zeit_pro_tag.empty:
+                    fig1 = px.bar(zeit_pro_tag, x='Datum', y='Minuten', 
+                                  labels={'Minuten': 'Minuten', 'Datum': 'Datum'},
+                                  color_discrete_sequence=['#FF6B6B'])
+                    fig1.update_layout(showlegend=False)
+                    st.plotly_chart(fig1, use_container_width=True)
+                else:
+                    st.info('Keine Daten für Diagramm verfügbar.')
+                
+                st.subheader('🎵 BPM-Fortschritt pro Übung/Song')
+                if len(df['Übung/Song'].unique()) > 0:
+                    fig2 = px.line(df, x='Datum', y='BPM', color='Übung/Song', 
+                                  markers=True, labels={'BPM': 'Tempo (BPM)', 'Datum': 'Datum', 'Übung/Song': 'Übung/Song'})
+                    st.plotly_chart(fig2, use_container_width=True)
+                else:
+                    st.info('Noch keine BPM-Daten vorhanden.')
+                
+                st.subheader('⏱️ Gesamtzeit pro Übung/Song')
+                zeit_pro_uebung = df.groupby('Übung/Song')['Minuten'].sum().reset_index()
+                if not zeit_pro_uebung.empty:
+                    fig3 = px.bar(zeit_pro_uebung, x='Übung/Song', y='Minuten', 
+                                  labels={'Minuten': 'Minuten', 'Übung/Song': 'Übung/Song'},
+                                  color_discrete_sequence=['#4ECDC4'])
+                    fig3.update_layout(showlegend=False)
+                    st.plotly_chart(fig3, use_container_width=True)
+                else:
+                    st.info('Keine Daten für Diagramm verfügbar.')
             else:
-                st.info('Noch keine BPM-Daten vorhanden.')
-            st.subheader('⏱️ Gesamtzeit pro Übung/Song')
-            zeit_pro_uebung = df.groupby('Übung/Song')['Minuten'].sum().reset_index()
-            fig3 = px.bar(zeit_pro_uebung, x='Übung/Song', y='Minuten', 
-                          labels={'Minuten': 'Minuten', 'Übung/Song': 'Übung/Song'},
-                          color_discrete_sequence=['#4ECDC4'])
-            fig3.update_layout(showlegend=False)
-            st.plotly_chart(fig3, use_container_width=True)
+                st.info('📝 Keine gültigen Einträge vorhanden.')
         else:
             st.info('📝 Noch keine Einträge vorhanden. Trage deine erste Übung ein!')
     except Exception as e:
         st.error(f'❌ Fehler beim Laden der Daten: {str(e)}')
+        st.info('💡 Tipp: Falls du eine CSV-Datei hochgeladen hast, stelle sicher, dass sie das richtige Format hat.')
 else:
     st.info('📝 Noch keine Einträge vorhanden. Trage deine erste Übung ein!')
 
