@@ -7,8 +7,7 @@ import plotly.express as px
 # --- Benutzerverwaltung (Zugangsdaten im Code) ---
 USERS = {
     "ralf": "hsetoal45jstencw4",
-    "steve": "get82jaget53dsaqw",
-    "joerg": "ajshdf73hg923m39fj",
+    "gast": "gast123",
     # weitere Benutzer: "benutzername": "passwort"
 }
 
@@ -18,12 +17,13 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- Login-Formular ---
+# --- Session-State Initialisierung ---
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "username" not in st.session_state:
     st.session_state.username = ""
 
+# --- Login-Formular ---
 def login_form():
     st.title("🥁 Drumlog Login")
     with st.form("login_form"):
@@ -164,17 +164,17 @@ if os.path.exists(DATA_FILE):
 else:
     st.info('📝 Noch keine Einträge vorhanden. Trage deine erste Übung ein!')
 
-# Nach Login, vor oder nach der Datentabelle:
+# --- Daten-Management Bereich ---
+st.markdown("---")
+st.subheader('📁 Daten-Management')
 
-# --- Download & Upload Bereich ---
-st.subheader('📥 Daten-Export & -Import')
-col_dl, col_ul = st.columns(2)
-
-with col_dl:
+# Container für bessere Kontrolle
+with st.container():
+    # Export
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, 'rb') as f:
             st.download_button(
-                label='Practice-Log herunterladen (CSV)',
+                label='📥 Practice-Log herunterladen',
                 data=f,
                 file_name=DATA_FILE,
                 mime='text/csv'
@@ -182,20 +182,29 @@ with col_dl:
     else:
         st.info('Noch keine Daten zum Download vorhanden.')
 
-with col_ul:
-    uploaded_file = st.file_uploader('Practice-Log hochladen (CSV)', type='csv', key='upload_csv')
-    if uploaded_file is not None:
-        # Datei ersetzen
-        try:
-            with open(DATA_FILE, 'wb') as f:
-                f.write(uploaded_file.getbuffer())
-            st.success('✅ Datei erfolgreich hochgeladen und Daten ersetzt!')
-            st.rerun()
-        except Exception as e:
-            st.error(f'❌ Fehler beim Hochladen: {str(e)}')
+    st.markdown("")  # Abstand
+    
+    # Import - als Button statt File-Uploader
+    if st.button('📤 Practice-Log hochladen'):
+        uploaded_file = st.file_uploader('CSV-Datei auswählen', type='csv', key='upload_csv', label_visibility='collapsed')
+        if uploaded_file is not None:
+            try:
+                with open(DATA_FILE, 'wb') as f:
+                    f.write(uploaded_file.getbuffer())
+                st.success('✅ Datei erfolgreich hochgeladen!')
+                st.info('💡 Klicke auf "Daten aktualisieren" um die neuen Daten anzuzeigen.')
+            except Exception as e:
+                st.error(f'❌ Fehler beim Hochladen: {str(e)}')
 
-# Logout-Button
-if st.button('Logout'):
+    st.markdown("")  # Abstand
+    
+    # Aktualisieren-Button
+    if st.button('🔄 Daten aktualisieren'):
+        st.rerun()
+
+# --- Logout Bereich ---
+st.markdown("---")
+if st.button('🚪 Logout'):
     st.session_state.logged_in = False
     st.session_state.username = ""
     st.rerun()
