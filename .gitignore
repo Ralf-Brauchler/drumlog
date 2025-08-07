@@ -43,3 +43,4 @@ Thumbs.db
 
 # Benutzerdaten (sollten nicht ins Repository)
 users.py
+.streamlit/secrets.toml

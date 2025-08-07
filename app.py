@@ -5,21 +5,34 @@ from datetime import date
 import plotly.express as px
 
 # Benutzerdaten importieren
+USERS = {}
 try:
     # Versuche zuerst Streamlit Secrets (für Cloud-Deployment)
     if hasattr(st, 'secrets') and 'users' in st.secrets:
         USERS = dict(st.secrets.users)
+        print("Loaded users from Streamlit secrets")
     else:
         # Fallback: Lokale users.py Datei
-        from users import USERS
-except ImportError:
-    # Fallback für den Fall, dass users.py nicht existiert
+        try:
+            from users import USERS
+            print("Loaded users from users.py")
+        except ImportError as e:
+            print(f"Could not import users.py: {e}")
+            # Fallback für den Fall, dass users.py nicht existiert
+            USERS = {
+                "demo": "demo123"
+            }
+            print("Using fallback demo user")
+except Exception as e:
+    print(f"Error loading users: {e}")
+    # Final fallback
     USERS = {
         "demo": "demo123"
     }
+    print("Using final fallback demo user")
 
 st.set_page_config(
-    page_title="Drumlog - Dein Übungstagebuch",
+    page_title="Drumlog - Your Practice Journal",
     page_icon="🥁",
     layout="wide"
 )
@@ -34,17 +47,20 @@ if "username" not in st.session_state:
 def login_form():
     st.title("🥁 Drumlog Login")
     with st.form("login_form"):
-        username = st.text_input("Benutzername")
-        password = st.text_input("Passwort", type="password")
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
         submitted = st.form_submit_button("Login")
         if submitted:
             if username in USERS and USERS[username] == password:
                 st.session_state.logged_in = True
                 st.session_state.username = username
-                st.success(f"Willkommen, {username}!")
+                st.success(f"Welcome, {username}!")
                 st.stop()  # Stoppt die Ausführung nach Login
             else:
-                st.error("Falscher Benutzername oder Passwort.")
+                st.error("Wrong username or password.")
+    
+    # Hinweis für den Benutzer
+    st.info("💡 If login doesn't work, try clicking again.")
 
 if not st.session_state.logged_in:
     login_form()
@@ -54,29 +70,29 @@ if not st.session_state.logged_in:
 username = st.session_state.username
 DATA_FILE = f'practice_log_{username}.csv'
 
-st.title(f'🥁 Drumlog – Dein Übungstagebuch ({username})')
+st.title(f'🥁 Drumlog – Your Practice Journal ({username})')
 
 # Formular zur Eingabe
 with st.form('practice_form'):
     col1, col2 = st.columns(2)
     with col1:
-        datum = st.date_input('Datum', value=date.today())
-        uebung = st.text_input('Übung/Song', placeholder="z.B. Basic Beat, We Will Rock You")
-        minuten = st.number_input('Minuten geübt', min_value=1, max_value=600, value=30)
+        datum = st.date_input('Date', value=date.today())
+        uebung = st.text_input('Exercise/Song', placeholder="e.g. Basic Beat, We Will Rock You")
+        minuten = st.number_input('Minutes practiced', min_value=1, max_value=600, value=30)
     with col2:
         bpm = st.number_input('Tempo (BPM)', min_value=20, max_value=400, value=60)
-        notizen = st.text_area('Notizen (optional)', placeholder="Wie lief es? Schwierigkeiten?")
-    abgeschickt = st.form_submit_button('💾 Speichern')
+        notizen = st.text_area('Notes (optional)', placeholder="How did it go? Difficulties?")
+    abgeschickt = st.form_submit_button('💾 Save')
 
 # Daten speichern
 if abgeschickt and uebung.strip():
     try:
         new_entry = pd.DataFrame([{
-            'Datum': datum,
-            'Übung/Song': uebung.strip(),
-            'Minuten': minuten,
+            'Date': datum,
+            'Exercise/Song': uebung.strip(),
+            'Minutes': minuten,
             'BPM': bpm,
-            'Notizen': notizen.strip() if notizen else ''
+            'Notes': notizen.strip() if notizen else ''
         }])
         if os.path.exists(DATA_FILE):
             df = pd.read_csv(DATA_FILE)
@@ -84,11 +100,11 @@ if abgeschickt and uebung.strip():
         else:
             df = new_entry
         df.to_csv(DATA_FILE, index=False)
-        st.success('✅ Eintrag erfolgreich gespeichert!')
+        st.success('✅ Entry saved successfully!')
     except Exception as e:
-        st.error(f'❌ Fehler beim Speichern: {str(e)}')
+        st.error(f'❌ Error saving entry: {str(e)}')
 elif abgeschickt:
-    st.warning('⚠️ Bitte gib eine Übung/Song ein!')
+    st.warning('⚠️ Please enter an exercise/song!')
 
 # Daten laden und anzeigen
 if os.path.exists(DATA_FILE):
@@ -96,84 +112,84 @@ if os.path.exists(DATA_FILE):
         df = pd.read_csv(DATA_FILE)
         
         # Validiere die Spaltenstruktur
-        required_columns = ['Datum', 'Übung/Song', 'Minuten', 'BPM', 'Notizen']
+        required_columns = ['Date', 'Exercise/Song', 'Minutes', 'BPM', 'Notes']
         if not all(col in df.columns for col in required_columns):
-            st.error('❌ Die hochgeladene CSV-Datei hat nicht das erwartete Format. Bitte verwende eine Datei mit den Spalten: Datum, Übung/Song, Minuten, BPM, Notizen')
+            st.error('❌ The uploaded CSV file does not have the expected format. Please use a file with the columns: Date, Exercise/Song, Minutes, BPM, Notes')
             st.stop()
         
         if not df.empty:
             # Validiere Datentypen
             try:
-                df['Minuten'] = pd.to_numeric(df['Minuten'], errors='coerce')
+                df['Minutes'] = pd.to_numeric(df['Minutes'], errors='coerce')
                 df['BPM'] = pd.to_numeric(df['BPM'], errors='coerce')
-                df['Datum'] = pd.to_datetime(df['Datum'], errors='coerce')
+                df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
                 
                 # Entferne Zeilen mit ungültigen Daten
-                df = df.dropna(subset=['Datum', 'Minuten', 'BPM'])
+                df = df.dropna(subset=['Date', 'Minutes', 'BPM'])
                 
                 if df.empty:
-                    st.warning('⚠️ Nach der Bereinigung sind keine gültigen Daten vorhanden.')
+                    st.warning('⚠️ No valid data after cleanup.')
                     st.stop()
                     
             except Exception as e:
-                st.error(f'❌ Fehler beim Validieren der Daten: {str(e)}')
+                st.error(f'❌ Error validating data: {str(e)}')
                 st.stop()
             
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric("Gesamtübungszeit", f"{df['Minuten'].sum():.0f} Min")
+                st.metric("Total practice time", f"{df['Minutes'].sum():.0f} Min")
             with col2:
-                st.metric("Anzahl Einträge", len(df))
+                st.metric("Number of entries", len(df))
             with col3:
-                st.metric("Durchschnitt BPM", f"{df['BPM'].mean():.0f}")
+                st.metric("Average BPM", f"{df['BPM'].mean():.0f}")
             
-            st.subheader('📊 Deine bisherigen Einträge')
+            st.subheader('📊 Your previous entries')
             st.dataframe(df, use_container_width=True)
             
             # Diagramme nur anzeigen, wenn genügend Daten vorhanden sind
             if len(df) > 0:
-                st.subheader('📈 Übungszeit pro Tag')
-                zeit_pro_tag = df.groupby('Datum')['Minuten'].sum().reset_index()
+                st.subheader('📈 Practice time per day')
+                zeit_pro_tag = df.groupby('Date')['Minutes'].sum().reset_index()
                 if not zeit_pro_tag.empty:
-                    fig1 = px.bar(zeit_pro_tag, x='Datum', y='Minuten', 
-                                  labels={'Minuten': 'Minuten', 'Datum': 'Datum'},
+                    fig1 = px.bar(zeit_pro_tag, x='Date', y='Minutes', 
+                                  labels={'Minutes': 'Minutes', 'Date': 'Date'},
                                   color_discrete_sequence=['#FF6B6B'])
                     fig1.update_layout(showlegend=False)
                     st.plotly_chart(fig1, use_container_width=True)
                 else:
-                    st.info('Keine Daten für Diagramm verfügbar.')
+                    st.info('No data available for chart.')
                 
-                st.subheader('🎵 BPM-Fortschritt pro Übung/Song')
-                if len(df['Übung/Song'].unique()) > 0:
-                    fig2 = px.line(df, x='Datum', y='BPM', color='Übung/Song', 
-                                  markers=True, labels={'BPM': 'Tempo (BPM)', 'Datum': 'Datum', 'Übung/Song': 'Übung/Song'})
+                st.subheader('🎵 BPM progress per exercise/song')
+                if len(df['Exercise/Song'].unique()) > 0:
+                    fig2 = px.line(df, x='Date', y='BPM', color='Exercise/Song', 
+                                  markers=True, labels={'BPM': 'Tempo (BPM)', 'Date': 'Date', 'Exercise/Song': 'Exercise/Song'})
                     st.plotly_chart(fig2, use_container_width=True)
                 else:
-                    st.info('Noch keine BPM-Daten vorhanden.')
+                    st.info('No BPM data yet.')
                 
-                st.subheader('⏱️ Gesamtzeit pro Übung/Song')
-                zeit_pro_uebung = df.groupby('Übung/Song')['Minuten'].sum().reset_index()
+                st.subheader('⏱️ Total time per exercise/song')
+                zeit_pro_uebung = df.groupby('Exercise/Song')['Minutes'].sum().reset_index()
                 if not zeit_pro_uebung.empty:
-                    fig3 = px.bar(zeit_pro_uebung, x='Übung/Song', y='Minuten', 
-                                  labels={'Minuten': 'Minuten', 'Übung/Song': 'Übung/Song'},
+                    fig3 = px.bar(zeit_pro_uebung, x='Exercise/Song', y='Minutes', 
+                                  labels={'Minutes': 'Minutes', 'Exercise/Song': 'Exercise/Song'},
                                   color_discrete_sequence=['#4ECDC4'])
                     fig3.update_layout(showlegend=False)
                     st.plotly_chart(fig3, use_container_width=True)
                 else:
-                    st.info('Keine Daten für Diagramm verfügbar.')
+                    st.info('No data available for chart.')
             else:
-                st.info('📝 Keine gültigen Einträge vorhanden.')
+                st.info('📝 No valid entries available.')
         else:
-            st.info('📝 Noch keine Einträge vorhanden. Trage deine erste Übung ein!')
+            st.info('📝 No entries yet. Add your first practice!')
     except Exception as e:
-        st.error(f'❌ Fehler beim Laden der Daten: {str(e)}')
-        st.info('💡 Tipp: Falls du eine CSV-Datei hochgeladen hast, stelle sicher, dass sie das richtige Format hat.')
+        st.error(f'❌ Error loading data: {str(e)}')
+        st.info('💡 Tip: If you uploaded a CSV file, make sure it has the correct format.')
 else:
-    st.info('📝 Noch keine Einträge vorhanden. Trage deine erste Übung ein!')
+    st.info('📝 No entries yet. Add your first practice!')
 
 # --- Daten-Management Bereich ---
 st.markdown("---")
-st.subheader('📁 Daten-Management')
+st.subheader('📁 Data Management')
 
 # Container für bessere Kontrolle
 with st.container():
@@ -181,32 +197,40 @@ with st.container():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, 'rb') as f:
             st.download_button(
-                label='📥 Practice-Log herunterladen',
+                label='📥 Download practice log',
                 data=f,
                 file_name=DATA_FILE,
                 mime='text/csv'
             )
     else:
-        st.info('Noch keine Daten zum Download vorhanden.')
+        st.info('No data available for download.')
 
     st.markdown("")  # Abstand
     
-    # Import - als Button statt File-Uploader
-    if st.button('📤 Practice-Log hochladen'):
-        uploaded_file = st.file_uploader('CSV-Datei auswählen', type='csv', key='upload_csv', label_visibility='collapsed')
-        if uploaded_file is not None:
-            try:
-                with open(DATA_FILE, 'wb') as f:
-                    f.write(uploaded_file.getbuffer())
-                st.success('✅ Datei erfolgreich hochgeladen!')
-                st.info('💡 Klicke auf "Daten aktualisieren" um die neuen Daten anzuzeigen.')
-            except Exception as e:
-                st.error(f'❌ Fehler beim Hochladen: {str(e)}')
+    # Import - einfacher File-Uploader
+    uploaded_file = st.file_uploader('📤 Upload practice log', type='csv', key='upload_csv')
+    if uploaded_file is not None:
+        try:
+            # Lese die hochgeladene Datei
+            uploaded_df = pd.read_csv(uploaded_file)
+            
+            # Validiere die Spaltenstruktur
+            required_columns = ['Date', 'Exercise/Song', 'Minutes', 'BPM', 'Notes']
+            if not all(col in uploaded_df.columns for col in required_columns):
+                st.error('❌ The uploaded CSV file does not have the expected format. Please use a file with the columns: Date, Exercise/Song, Minutes, BPM, Notes')
+            else:
+                # Ersetze die vorhandene Datei komplett
+                uploaded_df.to_csv(DATA_FILE, index=False)
+                st.success('✅ File uploaded and data replaced successfully!')
+                st.info('💡 Click on "Update data" to see the new data.')
+                # Kein st.rerun() mehr - die App lädt die neuen Daten beim nächsten natürlichen Reload
+        except Exception as e:
+            st.error(f'❌ Error uploading file: {str(e)}')
 
     st.markdown("")  # Abstand
     
     # Aktualisieren-Button
-    if st.button('🔄 Daten aktualisieren'):
+    if st.button('🔄 Update data'):
         st.rerun()
 
 # --- Logout Bereich ---
