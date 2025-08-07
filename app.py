@@ -152,7 +152,7 @@ with col_ul:
             with open(DATA_FILE, 'wb') as f:
                 f.write(uploaded_file.getbuffer())
             st.success('✅ Datei erfolgreich hochgeladen und Daten ersetzt!')
-            st.experimental_rerun()
+            st.rerun()
         except Exception as e:
             st.error(f'❌ Fehler beim Hochladen: {str(e)}')
 
@@ -160,4 +160,4 @@ with col_ul:
 if st.button('Logout'):
     st.session_state.logged_in = False
     st.session_state.username = ""
-    st.experimental_rerun()
+    st.rerun()
