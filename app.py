@@ -126,6 +126,36 @@ if os.path.exists(DATA_FILE):
 else:
     st.info('📝 Noch keine Einträge vorhanden. Trage deine erste Übung ein!')
 
+# Nach Login, vor oder nach der Datentabelle:
+
+# --- Download & Upload Bereich ---
+st.subheader('📥 Daten-Export & -Import')
+col_dl, col_ul = st.columns(2)
+
+with col_dl:
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, 'rb') as f:
+            st.download_button(
+                label='Practice-Log herunterladen (CSV)',
+                data=f,
+                file_name=DATA_FILE,
+                mime='text/csv'
+            )
+    else:
+        st.info('Noch keine Daten zum Download vorhanden.')
+
+with col_ul:
+    uploaded_file = st.file_uploader('Practice-Log hochladen (CSV)', type='csv', key='upload_csv')
+    if uploaded_file is not None:
+        # Datei ersetzen
+        try:
+            with open(DATA_FILE, 'wb') as f:
+                f.write(uploaded_file.getbuffer())
+            st.success('✅ Datei erfolgreich hochgeladen und Daten ersetzt!')
+            st.experimental_rerun()
+        except Exception as e:
+            st.error(f'❌ Fehler beim Hochladen: {str(e)}')
+
 # Logout-Button
 if st.button('Logout'):
     st.session_state.logged_in = False
