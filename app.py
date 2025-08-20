@@ -2,9 +2,9 @@ import streamlit as st
 import pandas as pd
 import os
 import subprocess
-import json
 from datetime import date, datetime
 import plotly.express as px
+import time
 
 # Security: File size validation
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB limit
@@ -25,9 +25,8 @@ def validate_csv_file(uploaded_file):
     return True, "File is valid"
 
 def get_logic_pro_info():
-    """Get current Logic Pro project info using AppleScript"""
+    """Get current Logic Pro project name via AppleScript"""
     try:
-        # AppleScript to get Logic Pro info
         script = '''
         tell application "System Events"
             if not (exists process "Logic Pro X") and not (exists process "Logic Pro") then
@@ -35,42 +34,52 @@ def get_logic_pro_info():
             end if
         end tell
         
-        tell application "Logic Pro X"
+        -- Try Logic Pro first (newer versions)
+        try
+            tell application "Logic Pro"
+                try
+                    set projectName to name of front document
+                    return projectName
+                on error
+                    return "no_project"
+                end try
+            end tell
+        on error
+            -- Fallback to Logic Pro X (older versions)
             try
-                set projectName to name of front document
-                set projectTempo to tempo of front document
-                return projectName & "|" & (projectTempo as string)
+                tell application "Logic Pro X"
+                    try
+                        set projectName to name of front document
+                        return projectName
+                    on error
+                        return "no_project"
+                    end try
+                end tell
             on error
-                return "no_project"
+                return "app_error"
             end try
-        end tell
+        end try
         '''
         
         result = subprocess.run(['osascript', '-e', script], 
-                              capture_output=True, text=True, timeout=5)
+                              capture_output=True, text=True, timeout=10)
         
         if result.returncode == 0:
             output = result.stdout.strip()
+            print(f"AppleScript output: '{output}'")  # Debug output
+            
             if output == "not_running":
                 return {"status": "not_running", "message": "Logic Pro is not running"}
             elif output == "no_project":
                 return {"status": "no_project", "message": "No Logic Pro project is open"}
+            elif output == "app_error":
+                return {"status": "error", "message": "Could not communicate with Logic Pro"}
             else:
-                # Parse project name and tempo
-                parts = output.split("|")
-                if len(parts) == 2:
-                    project_name = parts[0].strip()
-                    try:
-                        tempo = float(parts[1])
-                        return {
-                            "status": "success",
-                            "project_name": project_name,
-                            "tempo": tempo
-                        }
-                    except ValueError:
-                        return {"status": "error", "message": "Could not parse tempo"}
-                else:
-                    return {"status": "error", "message": "Unexpected response format"}
+                project_name = output.strip()
+                return {
+                    "status": "success",
+                    "project_name": project_name
+                }
         else:
             return {"status": "error", "message": f"AppleScript error: {result.stderr}"}
             
@@ -79,30 +88,68 @@ def get_logic_pro_info():
     except Exception as e:
         return {"status": "error", "message": f"Error: {str(e)}"}
 
-def auto_log_logic_session():
-    """Automatically log current Logic Pro session"""
+def get_current_logic_project():
+    """Get current Logic Pro project name for manual entry"""
     info = get_logic_pro_info()
     
     if info["status"] == "success":
-        # Create entry with current Logic Pro info
-        new_entry = pd.DataFrame([{
-            'Date': date.today(),
-            'Exercise/Song': info["project_name"],
-            'Minutes': 30,  # Default 30 minutes - user can adjust
-            'BPM': int(info["tempo"]),
-            'Notes': f"Auto-logged from Logic Pro session"
-        }])
-        
+        return info["project_name"]
+    else:
+        return ""
+
+def get_recent_exercises():
+    """Get the last 10 unique exercises/songs from the log"""
+    try:
         if os.path.exists(DATA_FILE):
             df = pd.read_csv(DATA_FILE)
-            df = pd.concat([df, new_entry], ignore_index=True)
-        else:
-            df = new_entry
-            
-        df.to_csv(DATA_FILE, index=False)
-        return True, f"✅ Auto-logged: {info['project_name']} at {int(info['tempo'])} BPM"
-    else:
-        return False, f"❌ {info['message']}"
+            if not df.empty and 'Exercise/Song' in df.columns:
+                # Get unique exercises, sorted by most recent first
+                recent_exercises = df['Exercise/Song'].dropna().unique()
+                # Return the last 10 unique exercises
+                return recent_exercises[-10:].tolist()
+        return []
+    except Exception as e:
+        print(f"Error getting recent exercises: {e}")
+        return []
+
+def safe_read_csv(file_path):
+    """Safely read CSV file with error handling"""
+    try:
+        if os.path.exists(file_path):
+            return pd.read_csv(file_path)
+        return pd.DataFrame()
+    except Exception as e:
+        print(f"Error reading CSV file {file_path}: {e}")
+        return pd.DataFrame()
+
+def create_backup(file_path):
+    """Create backup of data file before modifications"""
+    try:
+        if os.path.exists(file_path):
+            import shutil
+            backup_path = file_path + '.backup'
+            shutil.copy2(file_path, backup_path)
+            return True
+    except Exception as e:
+        print(f"Error creating backup: {e}")
+        return False
+
+def format_time(seconds):
+    """Format seconds into HH:MM:SS"""
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+def format_time_minutes(seconds):
+    """Format seconds into minutes only"""
+    minutes = int(seconds // 60)
+    return f"{minutes} min"
+
+def round_to_minutes(seconds):
+    """Round seconds to nearest minute, minimum 1 minute"""
+    minutes = round(seconds / 60)
+    return max(1, minutes)  # Ensure minimum of 1 minute
 
 st.set_page_config(
     page_title="Drumlog - Your Practice Journal",
@@ -115,40 +162,119 @@ DATA_FILE = 'practice_log.csv'
 
 st.title('🥁 Drumlog – Your Practice Journal')
 
-# --- Logic Pro Auto-Logging Section ---
+# --- Timer and Logic Pro Integration Section ---
 st.markdown("---")
-st.subheader('🎹 Logic Pro Auto-Logging')
+st.subheader('⏱️ Practice Tools')
 
-# Check Logic Pro status
-logic_info = get_logic_pro_info()
+# Create two columns for Timer and Logic Pro
+timer_col, logic_col = st.columns([2, 1])
 
-if logic_info["status"] == "success":
-    st.success(f"🎵 **Logic Pro detected!**")
-    st.info(f"**Current project:** {logic_info['project_name']} | **Tempo:** {int(logic_info['tempo'])} BPM")
+# Timer Section (Left Column)
+with timer_col:
+    st.markdown("**⏱️ Practice Timer**")
     
-    col1, col2 = st.columns([1, 2])
-    with col1:
-        if st.button('📝 Auto-Log Current Session', type='primary'):
-            success, message = auto_log_logic_session()
-            if success:
-                st.success(message)
-                st.rerun()
-            else:
-                st.error(message)
-    
-    with col2:
-        st.info("💡 Click to automatically log your current Logic Pro session with today's date and 30 minutes practice time.")
+    # Initialize timer session state safely
+    st.session_state.setdefault('timer_running', False)
+    st.session_state.setdefault('timer_start_time', None)
+    st.session_state.setdefault('timer_elapsed', 0)
+
+    # Timer controls - compact layout
+    if not st.session_state.timer_running:
+        col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
         
-elif logic_info["status"] == "not_running":
-    st.warning("⚠️ **Logic Pro is not running**")
-    st.info("Start Logic Pro and open a project to use auto-logging.")
+        with col1:
+            if st.button('▶️ Start', key='start_timer'):
+                st.session_state.timer_running = True
+                st.session_state.timer_start_time = time.time()
+                st.session_state.timer_elapsed = 0
+                st.rerun()
+        
+        with col2:
+            if st.button('🔄 Reset', key='reset_timer'):
+                st.session_state.timer_running = False
+                st.session_state.timer_start_time = None
+                st.session_state.timer_elapsed = 0
+                st.rerun()
+        
+        with col3:
+            if st.button('📝 Use', key='use_timer'):
+                if st.session_state.timer_elapsed > 0:
+                    st.session_state.timer_minutes = round_to_minutes(st.session_state.timer_elapsed)
+                    st.rerun()
+                else:
+                    st.warning("No timer data to use")
+        
+        with col4:
+            st.write("")  # Empty space for alignment
+    else:
+        col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
+        
+        with col1:
+            if st.button('⏸️ Stop', key='stop_timer'):
+                st.session_state.timer_running = False
+                # Safe timer calculation to prevent negative values
+                elapsed = max(0, time.time() - st.session_state.timer_start_time)
+                st.session_state.timer_elapsed = elapsed
+                st.rerun()
+        
+        with col2:
+            if st.button('🔄 Reset', key='reset_timer_running'):
+                st.session_state.timer_running = False
+                st.session_state.timer_start_time = None
+                st.session_state.timer_elapsed = 0
+                st.rerun()
+        
+        with col3:
+            if st.button('📝 Use', key='use_timer_running'):
+                if st.session_state.timer_elapsed > 0:
+                    st.session_state.timer_minutes = round_to_minutes(st.session_state.timer_elapsed)
+                    st.rerun()
+                else:
+                    st.warning("No timer data to use")
+        
+        with col4:
+            st.write("")  # Empty space for alignment
+
+    # Display timer (static, no auto-refresh to avoid app freezing)
+    if st.session_state.timer_running:
+        st.metric("⏱️ Timer Running", "⏱️ Running...")
+        st.caption("Timer is running - click 'Stop' when done")
+    elif st.session_state.timer_elapsed > 0:
+        st.metric("⏱️ Timer Stopped", format_time_minutes(st.session_state.timer_elapsed))
+        st.caption(f"📝 Click 'Use' to add {round_to_minutes(st.session_state.timer_elapsed)} minutes to your entry")
+    else:
+        st.metric("⏱️ Timer", "Ready")
+        st.caption("Click 'Start' to begin timing")
+
+# Logic Pro Integration (Right Column)
+with logic_col:
+    st.markdown("**🎹 Logic Pro**")
     
-elif logic_info["status"] == "no_project":
-    st.warning("⚠️ **No Logic Pro project is open**")
-    st.info("Open a project in Logic Pro to use auto-logging.")
-    
-else:
-    st.error(f"❌ **Error:** {logic_info['message']}")
+    # Check Logic Pro status
+    logic_info = get_logic_pro_info()
+
+    if logic_info["status"] == "success":
+        st.success("✅ Connected")
+        st.caption(f"Project: {logic_info['project_name']}")
+        
+        # Button to fill the manual entry form
+        if st.button('📝 Fill Name', key='fill_logic_name'):
+            st.session_state.project_name = logic_info['project_name']
+            st.rerun()
+        
+        st.caption("Click to fill project name")
+            
+    elif logic_info["status"] == "not_running":
+        st.info("💤 Not running")
+        st.caption("Start Logic Pro")
+        
+    elif logic_info["status"] == "no_project":
+        st.info("📁 No project")
+        st.caption("Open a project")
+        
+    else:
+        st.error("❌ Error")
+        st.caption(logic_info['message'])
 
 # --- Manual Entry Section ---
 st.markdown("---")
@@ -159,10 +285,43 @@ with st.form('practice_form'):
     col1, col2 = st.columns(2)
     with col1:
         datum = st.date_input('Date', value=date.today())
-        uebung = st.text_input('Exercise/Song', placeholder="e.g. Basic Beat, We Will Rock You")
-        minuten = st.number_input('Minutes practiced', min_value=1, max_value=600, value=30)
+        
+        # Get recent exercises for dropdown
+        recent_exercises = get_recent_exercises()
+        
+        # Initialize session state for project name safely
+        st.session_state.setdefault('project_name', "")
+        
+        # Create dropdown with recent exercises and option to add new
+        exercise_options = ["-- Add new exercise/song --"] + recent_exercises
+        
+        # If Logic Pro project name is set, use it as default
+        default_index = 0
+        if st.session_state.project_name and st.session_state.project_name in recent_exercises:
+            default_index = recent_exercises.index(st.session_state.project_name) + 1
+        
+        selected_exercise = st.selectbox(
+            'Exercise/Song', 
+            options=exercise_options,
+            index=default_index,
+            key='exercise_select'
+        )
+        
+        # If "Add new" is selected, show text input
+        if selected_exercise == "-- Add new exercise/song --":
+            uebung = st.text_input('New Exercise/Song Name', value=st.session_state.project_name, placeholder="e.g. Basic Beat, We Will Rock You")
+        else:
+            uebung = selected_exercise
+        
+        # Use timer minutes if available, otherwise default to 30
+        default_minutes = st.session_state.get('timer_minutes', 30)
+        # Ensure default_minutes is at least 1
+        if default_minutes < 1:
+            default_minutes = 30
+        minuten = st.number_input('Minutes practiced', min_value=1, max_value=600, value=default_minutes)
     with col2:
-        bpm = st.number_input('Tempo (BPM)', min_value=20, max_value=400, value=60)
+        # Validate BPM input with better error handling
+        bpm = st.number_input('Tempo (BPM)', min_value=20, max_value=400, value=60, help="Enter tempo between 20-400 BPM")
         notizen = st.text_area('Notes (optional)', placeholder="How did it go? Difficulties?")
     abgeschickt = st.form_submit_button('💾 Save')
 
@@ -173,20 +332,28 @@ if abgeschickt and uebung.strip():
         sanitized_uebung = uebung.strip()[:100]  # Limit length
         sanitized_notizen = notizen.strip()[:500] if notizen else ''  # Limit length
         
-        new_entry = pd.DataFrame([{
-            'Date': datum,
-            'Exercise/Song': sanitized_uebung,
-            'Minutes': minuten,
-            'BPM': bpm,
-            'Notes': sanitized_notizen
-        }])
-        if os.path.exists(DATA_FILE):
-            df = pd.read_csv(DATA_FILE)
-            df = pd.concat([df, new_entry], ignore_index=True)
+        # Validate numeric inputs
+        if not isinstance(minuten, (int, float)) or minuten < 1:
+            st.error('❌ Invalid minutes value. Please enter a valid number.')
+        elif not isinstance(bpm, (int, float)) or bpm < 20 or bpm > 400:
+            st.error('❌ Invalid BPM value. Please enter a value between 20-400.')
         else:
-            df = new_entry
-        df.to_csv(DATA_FILE, index=False)
-        st.success('✅ Entry saved successfully!')
+            new_entry = pd.DataFrame([{
+                'Date': datum,
+                'Exercise/Song': sanitized_uebung,
+                'Minutes': minuten,
+                'BPM': bpm,
+                'Notes': sanitized_notizen
+            }])
+            
+            # Create backup before saving
+            create_backup(DATA_FILE)
+            
+            # Use safe CSV reading
+            df = safe_read_csv(DATA_FILE)
+            df = pd.concat([df, new_entry], ignore_index=True)
+            df.to_csv(DATA_FILE, index=False)
+            st.success('✅ Entry saved successfully!')
     except Exception as e:
         # Security: Don't expose detailed error messages
         st.error('❌ Error saving entry. Please try again.')
@@ -195,85 +362,78 @@ elif abgeschickt:
     st.warning('⚠️ Please enter an exercise/song!')
 
 # Daten laden und anzeigen
-if os.path.exists(DATA_FILE):
+df = safe_read_csv(DATA_FILE)
+
+if not df.empty:
+    # Validiere die Spaltenstruktur
+    required_columns = ['Date', 'Exercise/Song', 'Minutes', 'BPM', 'Notes']
+    if not all(col in df.columns for col in required_columns):
+        st.error('❌ The uploaded CSV file does not have the expected format. Please use a file with the columns: Date, Exercise/Song, Minutes, BPM, Notes')
+        st.stop()
+    
+    # Validiere Datentypen
     try:
-        df = pd.read_csv(DATA_FILE)
+        df['Minutes'] = pd.to_numeric(df['Minutes'], errors='coerce')
+        df['BPM'] = pd.to_numeric(df['BPM'], errors='coerce')
+        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
         
-        # Validiere die Spaltenstruktur
-        required_columns = ['Date', 'Exercise/Song', 'Minutes', 'BPM', 'Notes']
-        if not all(col in df.columns for col in required_columns):
-            st.error('❌ The uploaded CSV file does not have the expected format. Please use a file with the columns: Date, Exercise/Song, Minutes, BPM, Notes')
+        # Entferne nur Zeilen wo ALLE kritischen Spalten fehlen (nicht einzelne)
+        df = df.dropna(subset=['Date', 'Minutes', 'BPM'], how='all')
+        
+        if df.empty:
+            st.warning('⚠️ No valid data after cleanup.')
             st.stop()
-        
-        if not df.empty:
-            # Validiere Datentypen
-            try:
-                df['Minutes'] = pd.to_numeric(df['Minutes'], errors='coerce')
-                df['BPM'] = pd.to_numeric(df['BPM'], errors='coerce')
-                df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-                
-                # Entferne Zeilen mit ungültigen Daten
-                df = df.dropna(subset=['Date', 'Minutes', 'BPM'])
-                
-                if df.empty:
-                    st.warning('⚠️ No valid data after cleanup.')
-                    st.stop()
-                    
-            except Exception as e:
-                st.error('❌ Error validating data. Please check your data format.')
-                print(f"Error validating data: {str(e)}")  # Log for debugging
-                st.stop()
             
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Total practice time", f"{df['Minutes'].sum():.0f} Min")
-            with col2:
-                st.metric("Number of entries", len(df))
-            with col3:
-                st.metric("Average BPM", f"{df['BPM'].mean():.0f}")
-            
-            st.subheader('📊 Your previous entries')
-            st.dataframe(df, use_container_width=True)
-            
-            # Diagramme nur anzeigen, wenn genügend Daten vorhanden sind
-            if len(df) > 0:
-                st.subheader('📈 Practice time per day')
-                zeit_pro_tag = df.groupby('Date')['Minutes'].sum().reset_index()
-                if not zeit_pro_tag.empty:
-                    fig1 = px.bar(zeit_pro_tag, x='Date', y='Minutes', 
-                                  labels={'Minutes': 'Minutes', 'Date': 'Date'},
-                                  color_discrete_sequence=['#FF6B6B'])
-                    fig1.update_layout(showlegend=False)
-                    st.plotly_chart(fig1, use_container_width=True)
-                else:
-                    st.info('No data available for chart.')
-                
-                st.subheader('🎵 BPM progress per exercise/song')
-                if len(df['Exercise/Song'].unique()) > 0:
-                    fig2 = px.line(df, x='Date', y='BPM', color='Exercise/Song', 
-                                  markers=True, labels={'BPM': 'Tempo (BPM)', 'Date': 'Date', 'Exercise/Song': 'Exercise/Song'})
-                    st.plotly_chart(fig2, use_container_width=True)
-                else:
-                    st.info('No BPM data yet.')
-                
-                st.subheader('⏱️ Total time per exercise/song')
-                zeit_pro_uebung = df.groupby('Exercise/Song')['Minutes'].sum().reset_index()
-                if not zeit_pro_uebung.empty:
-                    fig3 = px.bar(zeit_pro_uebung, x='Exercise/Song', y='Minutes', 
-                                  labels={'Minutes': 'Minutes', 'Exercise/Song': 'Exercise/Song'},
-                                  color_discrete_sequence=['#4ECDC4'])
-                    fig3.update_layout(showlegend=False)
-                    st.plotly_chart(fig3, use_container_width=True)
-                else:
-                    st.info('No data available for chart.')
-            else:
-                st.info('📝 No valid entries available.')
-        else:
-            st.info('📝 No entries yet. Add your first practice!')
     except Exception as e:
-        st.error('❌ Error loading data. Please try again.')
-        print(f"Error loading data: {str(e)}")  # Log for debugging
-        st.info('💡 Tip: If you uploaded a CSV file, make sure it has the correct format.')
+        st.error('❌ Error validating data. Please check your data format.')
+        print(f"Error validating data: {str(e)}")  # Log for debugging
+        st.stop()
+    
+    # Display metrics and data
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total practice time", f"{df['Minutes'].sum():.0f} Min")
+    with col2:
+        st.metric("Number of entries", len(df))
+    with col3:
+        st.metric("Average BPM", f"{df['BPM'].mean():.0f}")
+    
+    st.subheader('📊 Your previous entries')
+    st.dataframe(df, use_container_width=True)
+    
+    # Diagramme nur anzeigen, wenn genügend Daten vorhanden sind
+    if len(df) > 0:
+        st.subheader('📈 Practice time per day')
+        zeit_pro_tag = df.groupby('Date')['Minutes'].sum().reset_index()
+        if not zeit_pro_tag.empty:
+            fig1 = px.bar(zeit_pro_tag, x='Date', y='Minutes', 
+                          labels={'Minutes': 'Minutes', 'Date': 'Date'},
+                          color_discrete_sequence=['#FF6B6B'])
+            fig1.update_layout(showlegend=False)
+            st.plotly_chart(fig1, use_container_width=True)
+        else:
+            st.info('No data available for chart.')
+        
+        st.subheader('🎵 BPM progress per exercise/song')
+        if len(df['Exercise/Song'].unique()) > 0:
+            fig2 = px.line(df, x='Date', y='BPM', color='Exercise/Song', 
+                          markers=True, labels={'BPM': 'Tempo (BPM)', 'Date': 'Date', 'Exercise/Song': 'Exercise/Song'})
+            st.plotly_chart(fig2, use_container_width=True)
+        else:
+            st.info('No BPM data yet.')
+        
+        st.subheader('⏱️ Total time per exercise/song')
+        zeit_pro_uebung = df.groupby('Exercise/Song')['Minutes'].sum().reset_index()
+        if not zeit_pro_uebung.empty:
+            fig3 = px.bar(zeit_pro_uebung, x='Exercise/Song', y='Minutes', 
+                          labels={'Minutes': 'Minutes', 'Exercise/Song': 'Exercise/Song'},
+                          color_discrete_sequence=['#4ECDC4'])
+            fig3.update_layout(showlegend=False)
+            st.plotly_chart(fig3, use_container_width=True)
+        else:
+            st.info('No data available for chart.')
+    else:
+        st.info('📝 No valid entries available.')
 else:
     st.info('📝 No entries yet. Add your first practice!')
 
@@ -323,11 +483,13 @@ with st.container():
                             if col in uploaded_df.columns:
                                 uploaded_df[col] = uploaded_df[col].astype(str).str[:100]  # Limit length
                         
+                        # Create backup before replacing data
+                        create_backup(DATA_FILE)
+                        
                         # Ersetze die vorhandene Datei komplett
                         uploaded_df.to_csv(DATA_FILE, index=False)
                         st.success('✅ File uploaded and data replaced successfully!')
                         st.info('💡 Click on "Update data" to see the new data.')
-                        # Kein st.rerun() mehr - die App lädt die neuen Daten beim nächsten natürlichen Reload
             except Exception as e:
                 st.error('❌ Error uploading file. Please check the file format.')
                 print(f"Error uploading file: {str(e)}")  # Log for debugging
