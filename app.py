@@ -26,6 +26,12 @@ def validate_csv_file(uploaded_file):
 
 def get_logic_pro_info():
     """Get current Logic Pro project name via AppleScript"""
+    # Cache the result for 2 seconds to avoid excessive AppleScript calls
+    current_time = time.time()
+    if hasattr(st.session_state, 'logic_pro_cache') and hasattr(st.session_state, 'logic_pro_cache_time'):
+        if current_time - st.session_state.logic_pro_cache_time < 2:  # Cache for 2 seconds
+            return st.session_state.logic_pro_cache
+    
     try:
         script = '''
         tell application "System Events"
@@ -66,27 +72,38 @@ def get_logic_pro_info():
         
         if result.returncode == 0:
             output = result.stdout.strip()
-            print(f"AppleScript output: '{output}'")  # Debug output
             
             if output == "not_running":
-                return {"status": "not_running", "message": "Logic Pro is not running"}
+                result = {"status": "not_running", "message": "Logic Pro is not running"}
             elif output == "no_project":
-                return {"status": "no_project", "message": "No Logic Pro project is open"}
+                result = {"status": "no_project", "message": "No Logic Pro project is open"}
             elif output == "app_error":
-                return {"status": "error", "message": "Could not communicate with Logic Pro"}
+                result = {"status": "error", "message": "Could not communicate with Logic Pro"}
             else:
                 project_name = output.strip()
-                return {
+                result = {
                     "status": "success",
                     "project_name": project_name
                 }
         else:
-            return {"status": "error", "message": f"AppleScript error: {result.stderr}"}
+            result = {"status": "error", "message": f"AppleScript error: {result.stderr}"}
+        
+        # Cache the result
+        st.session_state.logic_pro_cache = result
+        st.session_state.logic_pro_cache_time = current_time
+        
+        return result
             
     except subprocess.TimeoutExpired:
-        return {"status": "error", "message": "Logic Pro took too long to respond"}
+        result = {"status": "error", "message": "Logic Pro took too long to respond"}
+        st.session_state.logic_pro_cache = result
+        st.session_state.logic_pro_cache_time = current_time
+        return result
     except Exception as e:
-        return {"status": "error", "message": f"Error: {str(e)}"}
+        result = {"status": "error", "message": f"Error: {str(e)}"}
+        st.session_state.logic_pro_cache = result
+        st.session_state.logic_pro_cache_time = current_time
+        return result
 
 def get_current_logic_project():
     """Get current Logic Pro project name for manual entry"""
@@ -97,19 +114,29 @@ def get_current_logic_project():
     else:
         return ""
 
-def get_recent_exercises():
-    """Get the last 10 unique exercises/songs from the log"""
+def get_recent_exercises_with_bpm():
+    """Get the last 10 unique exercises/songs with their most recent BPM from the log"""
     try:
         if os.path.exists(DATA_FILE):
             df = pd.read_csv(DATA_FILE)
-            if not df.empty and 'Exercise/Song' in df.columns:
-                # Get unique exercises, sorted by most recent first
-                recent_exercises = df['Exercise/Song'].dropna().unique()
-                # Return the last 10 unique exercises
-                return recent_exercises[-10:].tolist()
+            if not df.empty and 'Exercise/Song' in df.columns and 'BPM' in df.columns:
+                # Group by Exercise/Song and get the most recent entry for each
+                recent_data = []
+                for song in df['Exercise/Song'].dropna().unique():
+                    song_entries = df[df['Exercise/Song'] == song].sort_values('Date', ascending=False)
+                    if not song_entries.empty:
+                        latest_entry = song_entries.iloc[0]
+                        recent_data.append({
+                            'song': song,
+                            'bpm': latest_entry['BPM'] if pd.notna(latest_entry['BPM']) else 60
+                        })
+                
+                # Sort by most recent (assuming Date is in chronological order)
+                # Return the last 10 unique exercises with their BPM
+                return recent_data[-10:]
         return []
     except Exception as e:
-        print(f"Error getting recent exercises: {e}")
+        print(f"Error getting recent exercises with BPM: {e}")
         return []
 
 def safe_read_csv(file_path):
@@ -280,38 +307,50 @@ with logic_col:
 st.markdown("---")
 st.subheader('✏️ Manual Entry')
 
+# Get recent exercises with BPM and prepare song selection
+recent_exercises_data = get_recent_exercises_with_bpm()
+
+# Initialize session state for project name safely
+st.session_state.setdefault('project_name', "")
+st.session_state.setdefault('song_input', st.session_state.project_name if st.session_state.project_name else "")
+st.session_state.setdefault('bpm_input', 60)
+
+# Create options list with recent exercises
+exercise_options = [item['song'] for item in recent_exercises_data]
+
+# If Logic Pro project name is set and not in recent exercises, add it to options
+if st.session_state.project_name and st.session_state.project_name not in exercise_options:
+    exercise_options.insert(0, st.session_state.project_name)
+
+# Show recent songs as clickable buttons (outside the form)
+if recent_exercises_data:
+    st.caption("Recent songs (click to select song and BPM):")
+    cols = st.columns(min(3, len(recent_exercises_data)))
+    for i, item in enumerate(recent_exercises_data):
+        col_idx = i % 3
+        with cols[col_idx]:
+            song = item['song']
+            bpm = item['bpm']
+            button_text = f"{song} ({bpm} BPM)"
+            if st.button(button_text, key=f"song_btn_{i}"):
+                st.session_state.song_input = song
+                st.session_state.bpm_input = bpm
+                st.rerun()
+
 # Formular zur Eingabe
 with st.form('practice_form'):
     col1, col2 = st.columns(2)
     with col1:
         datum = st.date_input('Date', value=date.today())
         
-        # Get recent exercises for dropdown
-        recent_exercises = get_recent_exercises()
-        
-        # Initialize session state for project name safely
-        st.session_state.setdefault('project_name', "")
-        
-        # Create dropdown with recent exercises and option to add new
-        exercise_options = ["-- Add new exercise/song --"] + recent_exercises
-        
-        # If Logic Pro project name is set, use it as default
-        default_index = 0
-        if st.session_state.project_name and st.session_state.project_name in recent_exercises:
-            default_index = recent_exercises.index(st.session_state.project_name) + 1
-        
-        selected_exercise = st.selectbox(
-            'Exercise/Song', 
-            options=exercise_options,
-            index=default_index,
-            key='exercise_select'
+        # Use text_input for song name (can be typed or selected from buttons above)
+        uebung = st.text_input(
+            'Exercise/Song',
+            value=st.session_state.song_input,
+            placeholder="Type song name or select from recent songs above",
+            key='song_input',
+            help="Type a new song name or click on a recent song above"
         )
-        
-        # If "Add new" is selected, show text input
-        if selected_exercise == "-- Add new exercise/song --":
-            uebung = st.text_input('New Exercise/Song Name', value=st.session_state.project_name, placeholder="e.g. Basic Beat, We Will Rock You")
-        else:
-            uebung = selected_exercise
         
         # Use timer minutes if available, otherwise default to 30
         default_minutes = st.session_state.get('timer_minutes', 30)
@@ -321,7 +360,7 @@ with st.form('practice_form'):
         minuten = st.number_input('Minutes practiced', min_value=1, max_value=600, value=default_minutes)
     with col2:
         # Validate BPM input with better error handling
-        bpm = st.number_input('Tempo (BPM)', min_value=20, max_value=400, value=60, help="Enter tempo between 20-400 BPM")
+        bpm = st.number_input('Tempo (BPM)', min_value=20, max_value=400, value=st.session_state.bpm_input, help="Enter tempo between 20-400 BPM")
         notizen = st.text_area('Notes (optional)', placeholder="How did it go? Difficulties?")
     abgeschickt = st.form_submit_button('💾 Save')
 
@@ -338,6 +377,22 @@ if abgeschickt and uebung.strip():
         elif not isinstance(bpm, (int, float)) or bpm < 20 or bpm > 400:
             st.error('❌ Invalid BPM value. Please enter a value between 20-400.')
         else:
+            # Create backup before saving
+            create_backup(DATA_FILE)
+            
+            # Use safe CSV reading
+            df = safe_read_csv(DATA_FILE)
+            
+            # Check if this song already exists and update BPM if different
+            existing_songs = df['Exercise/Song'].dropna().unique() if not df.empty else []
+            if sanitized_uebung in existing_songs:
+                # Get the most recent BPM for this song
+                song_entries = df[df['Exercise/Song'] == sanitized_uebung]
+                if not song_entries.empty:
+                    last_bpm = song_entries.iloc[-1]['BPM']
+                    if last_bpm != bpm:
+                        st.info(f"🎵 Updated BPM for '{sanitized_uebung}' from {last_bpm} to {bpm}")
+            
             new_entry = pd.DataFrame([{
                 'Date': datum,
                 'Exercise/Song': sanitized_uebung,
@@ -346,11 +401,6 @@ if abgeschickt and uebung.strip():
                 'Notes': sanitized_notizen
             }])
             
-            # Create backup before saving
-            create_backup(DATA_FILE)
-            
-            # Use safe CSV reading
-            df = safe_read_csv(DATA_FILE)
             df = pd.concat([df, new_entry], ignore_index=True)
             df.to_csv(DATA_FILE, index=False)
             st.success('✅ Entry saved successfully!')
