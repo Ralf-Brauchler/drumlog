@@ -1,25 +1,10 @@
 import streamlit as st
 import pandas as pd
 import os
-import re
-import hashlib
-import secrets
-from datetime import date
+import subprocess
+import json
+from datetime import date, datetime
 import plotly.express as px
-
-# Security: Path sanitization function
-def sanitize_filename(filename):
-    """Sanitize filename to prevent path traversal attacks"""
-    # Remove any path separators and dangerous characters
-    sanitized = re.sub(r'[<>:"/\\|?*]', '', filename)
-    # Limit length and ensure it's not empty
-    sanitized = sanitized[:50] if sanitized else 'user'
-    return sanitized
-
-# Security: Password hashing
-def hash_password(password):
-    """Hash password using SHA-256"""
-    return hashlib.sha256(password.encode()).hexdigest()
 
 # Security: File size validation
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB limit
@@ -39,28 +24,85 @@ def validate_csv_file(uploaded_file):
     
     return True, "File is valid"
 
-# Benutzerdaten importieren
-USERS = {}
-try:
-    # Versuche zuerst Streamlit Secrets (für Cloud-Deployment)
-    if hasattr(st, 'secrets') and 'users' in st.secrets:
-        USERS = dict(st.secrets.users)
-        print("Loaded users from Streamlit secrets")
+def get_logic_pro_info():
+    """Get current Logic Pro project info using AppleScript"""
+    try:
+        # AppleScript to get Logic Pro info
+        script = '''
+        tell application "System Events"
+            if not (exists process "Logic Pro X") and not (exists process "Logic Pro") then
+                return "not_running"
+            end if
+        end tell
+        
+        tell application "Logic Pro X"
+            try
+                set projectName to name of front document
+                set projectTempo to tempo of front document
+                return projectName & "|" & (projectTempo as string)
+            on error
+                return "no_project"
+            end try
+        end tell
+        '''
+        
+        result = subprocess.run(['osascript', '-e', script], 
+                              capture_output=True, text=True, timeout=5)
+        
+        if result.returncode == 0:
+            output = result.stdout.strip()
+            if output == "not_running":
+                return {"status": "not_running", "message": "Logic Pro is not running"}
+            elif output == "no_project":
+                return {"status": "no_project", "message": "No Logic Pro project is open"}
+            else:
+                # Parse project name and tempo
+                parts = output.split("|")
+                if len(parts) == 2:
+                    project_name = parts[0].strip()
+                    try:
+                        tempo = float(parts[1])
+                        return {
+                            "status": "success",
+                            "project_name": project_name,
+                            "tempo": tempo
+                        }
+                    except ValueError:
+                        return {"status": "error", "message": "Could not parse tempo"}
+                else:
+                    return {"status": "error", "message": "Unexpected response format"}
+        else:
+            return {"status": "error", "message": f"AppleScript error: {result.stderr}"}
+            
+    except subprocess.TimeoutExpired:
+        return {"status": "error", "message": "Logic Pro took too long to respond"}
+    except Exception as e:
+        return {"status": "error", "message": f"Error: {str(e)}"}
+
+def auto_log_logic_session():
+    """Automatically log current Logic Pro session"""
+    info = get_logic_pro_info()
+    
+    if info["status"] == "success":
+        # Create entry with current Logic Pro info
+        new_entry = pd.DataFrame([{
+            'Date': date.today(),
+            'Exercise/Song': info["project_name"],
+            'Minutes': 30,  # Default 30 minutes - user can adjust
+            'BPM': int(info["tempo"]),
+            'Notes': f"Auto-logged from Logic Pro session"
+        }])
+        
+        if os.path.exists(DATA_FILE):
+            df = pd.read_csv(DATA_FILE)
+            df = pd.concat([df, new_entry], ignore_index=True)
+        else:
+            df = new_entry
+            
+        df.to_csv(DATA_FILE, index=False)
+        return True, f"✅ Auto-logged: {info['project_name']} at {int(info['tempo'])} BPM"
     else:
-        # Fallback: Lokale users.py Datei
-        try:
-            from users import USERS
-            print("Loaded users from users.py")
-        except ImportError as e:
-            print(f"Could not import users.py: {e}")
-            # No fallback for security reasons
-            USERS = {}
-            print("No users available - please create users.py file")
-except Exception as e:
-    print(f"Error loading users: {e}")
-    # No fallback for security reasons
-    USERS = {}
-    print("No users available due to error - please check configuration")
+        return False, f"❌ {info['message']}"
 
 st.set_page_config(
     page_title="Drumlog - Your Practice Journal",
@@ -68,65 +110,49 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- Session-State Initialisierung ---
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-if "username" not in st.session_state:
-    st.session_state.username = ""
-if "session_token" not in st.session_state:
-    st.session_state.session_token = ""
+# --- Single-user local setup ---
+DATA_FILE = 'practice_log.csv'
 
-# Security: Generate session token
-def generate_session_token():
-    return secrets.token_urlsafe(32)
+st.title('🥁 Drumlog – Your Practice Journal')
 
-# --- Login-Formular ---
-def login_form():
-    st.title("🥁 Drumlog Login")
-    with st.form("login_form"):
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Login")
-        if submitted:
-            # Security: Sanitize username
-            sanitized_username = sanitize_filename(username)
-            if sanitized_username != username:
-                st.error("Invalid username format.")
-                return
-            
-            # Security: Hash password for comparison
-            hashed_password = hash_password(password)
-            
-            if username in USERS and USERS[username] == hashed_password:
-                st.session_state.logged_in = True
-                st.session_state.username = username
-                st.session_state.session_token = generate_session_token()
-                st.success(f"Welcome, {username}!")
-                st.stop()  # Stoppt die Ausführung nach Login
-            else:
-                st.error("Wrong username or password.")
+# --- Logic Pro Auto-Logging Section ---
+st.markdown("---")
+st.subheader('🎹 Logic Pro Auto-Logging')
+
+# Check Logic Pro status
+logic_info = get_logic_pro_info()
+
+if logic_info["status"] == "success":
+    st.success(f"🎵 **Logic Pro detected!**")
+    st.info(f"**Current project:** {logic_info['project_name']} | **Tempo:** {int(logic_info['tempo'])} BPM")
     
-    # Hinweis für den Benutzer
-    st.info("💡 If login doesn't work, try clicking again.")
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        if st.button('📝 Auto-Log Current Session', type='primary'):
+            success, message = auto_log_logic_session()
+            if success:
+                st.success(message)
+                st.rerun()
+            else:
+                st.error(message)
+    
+    with col2:
+        st.info("💡 Click to automatically log your current Logic Pro session with today's date and 30 minutes practice time.")
+        
+elif logic_info["status"] == "not_running":
+    st.warning("⚠️ **Logic Pro is not running**")
+    st.info("Start Logic Pro and open a project to use auto-logging.")
+    
+elif logic_info["status"] == "no_project":
+    st.warning("⚠️ **No Logic Pro project is open**")
+    st.info("Open a project in Logic Pro to use auto-logging.")
+    
+else:
+    st.error(f"❌ **Error:** {logic_info['message']}")
 
-if not st.session_state.logged_in:
-    login_form()
-    st.stop()
-
-# Security: Validate session token
-if not st.session_state.session_token:
-    st.error("Invalid session. Please login again.")
-    st.session_state.logged_in = False
-    st.session_state.username = ""
-    st.rerun()
-
-# --- Nach Login: Benutzername holen und benutzerspezifische Datei setzen ---
-username = st.session_state.username
-# Security: Sanitize filename to prevent path traversal
-safe_username = sanitize_filename(username)
-DATA_FILE = f'practice_log_{safe_username}.csv'
-
-st.title(f'🥁 Drumlog – Your Practice Journal ({username})')
+# --- Manual Entry Section ---
+st.markdown("---")
+st.subheader('✏️ Manual Entry')
 
 # Formular zur Eingabe
 with st.form('practice_form'):
@@ -263,7 +289,7 @@ with st.container():
             st.download_button(
                 label='📥 Download practice log',
                 data=f,
-                file_name=f'practice_log_{safe_username}.csv',  # Security: Use sanitized filename
+                file_name='practice_log.csv',
                 mime='text/csv'
             )
     else:
@@ -312,10 +338,4 @@ with st.container():
     if st.button('🔄 Update data'):
         st.rerun()
 
-# --- Logout Bereich ---
-st.markdown("---")
-if st.button('🚪 Logout'):
-    st.session_state.logged_in = False
-    st.session_state.username = ""
-    st.session_state.session_token = ""
-    st.rerun()
+# End of app

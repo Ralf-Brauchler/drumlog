@@ -1,23 +1,26 @@
-# Drumlog - Dein Übungstagebuch
+## Drumlog – Your Practice Journal (Single‑User, Local)
 
-Eine Streamlit-App zum Tracken deines Drum-Fortschritts.
+Streamlit app to track your drum practice, now simplified for single-user local use on macOS.
 
-## Features
+### Features
 
-- Eingabe von Übungsdaten (Datum, Übung/Song, Minuten, BPM, Notizen)
-- Visualisierung des Fortschritts:
-  - Übungszeit pro Tag
-  - BPM-Fortschritt pro Übung/Song
-  - Gesamtzeit pro Übung/Song
+- Input practice data: Date, Exercise/Song, Minutes, BPM, Notes
+- Visualizations:
+  - Practice time per day
+  - BPM progress per exercise/song
+  - Total time per exercise/song
+- Import/Export your log as CSV
 
-## Installation
+### Data storage
 
-1. Repository klonen
-2. Virtuelle Umgebung erstellen: `python3 -m venv venv`
-3. Umgebung aktivieren: `source venv/bin/activate`
-4. Dependencies installieren: `pip install -r requirements.txt`
-5. App starten: `streamlit run app.py`
+- Data is stored locally in `practice_log.csv` in the project directory.
 
-## Deployment
+### Install & Run (macOS)
 
-Diese App ist für Streamlit Cloud optimiert.
+1. Clone the repository
+2. Create a virtual environment: `python3 -m venv venv`
+3. Activate it: `source venv/bin/activate`
+4. Install dependencies: `pip install -r requirements.txt`
+5. Start the app: `streamlit run app.py`
+
+No login or user accounts are required.
