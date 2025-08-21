@@ -24,96 +24,6 @@ def validate_csv_file(uploaded_file):
     
     return True, "File is valid"
 
-def get_logic_pro_info():
-    """Get current Logic Pro project name via AppleScript"""
-    # Cache the result for 2 seconds to avoid excessive AppleScript calls
-    current_time = time.time()
-    if hasattr(st.session_state, 'logic_pro_cache') and hasattr(st.session_state, 'logic_pro_cache_time'):
-        if current_time - st.session_state.logic_pro_cache_time < 2:  # Cache for 2 seconds
-            return st.session_state.logic_pro_cache
-    
-    try:
-        script = '''
-        tell application "System Events"
-            if not (exists process "Logic Pro X") and not (exists process "Logic Pro") then
-                return "not_running"
-            end if
-        end tell
-        
-        -- Try Logic Pro first (newer versions)
-        try
-            tell application "Logic Pro"
-                try
-                    set projectName to name of front document
-                    return projectName
-                on error
-                    return "no_project"
-                end try
-            end tell
-        on error
-            -- Fallback to Logic Pro X (older versions)
-            try
-                tell application "Logic Pro X"
-                    try
-                        set projectName to name of front document
-                        return projectName
-                    on error
-                        return "no_project"
-                    end try
-                end tell
-            on error
-                return "app_error"
-            end try
-        end try
-        '''
-        
-        result = subprocess.run(['osascript', '-e', script], 
-                              capture_output=True, text=True, timeout=10)
-        
-        if result.returncode == 0:
-            output = result.stdout.strip()
-            
-            if output == "not_running":
-                result = {"status": "not_running", "message": "Logic Pro is not running"}
-            elif output == "no_project":
-                result = {"status": "no_project", "message": "No Logic Pro project is open"}
-            elif output == "app_error":
-                result = {"status": "error", "message": "Could not communicate with Logic Pro"}
-            else:
-                project_name = output.strip()
-                result = {
-                    "status": "success",
-                    "project_name": project_name
-                }
-        else:
-            result = {"status": "error", "message": f"AppleScript error: {result.stderr}"}
-        
-        # Cache the result
-        st.session_state.logic_pro_cache = result
-        st.session_state.logic_pro_cache_time = current_time
-        
-        return result
-            
-    except subprocess.TimeoutExpired:
-        result = {"status": "error", "message": "Logic Pro took too long to respond"}
-        st.session_state.logic_pro_cache = result
-        st.session_state.logic_pro_cache_time = current_time
-        return result
-    except Exception as e:
-        result = {"status": "error", "message": f"Error: {str(e)}"}
-        st.session_state.logic_pro_cache = result
-        st.session_state.logic_pro_cache_time = current_time
-        return result
-
-def get_current_logic_project():
-    """Get current Logic Pro project name for manual entry"""
-    info = get_logic_pro_info()
-    
-    if info["status"] == "success":
-        return info["project_name"]
-    else:
-        return ""
-
 def get_recent_exercises_with_bpm():
     """Get the last 10 unique exercises/songs with their most recent BPM from the log"""
     try:
@@ -189,119 +99,68 @@ DATA_FILE = 'practice_log.csv'
 
 st.title('🥁 Drumlog – Your Practice Journal')
 
-# --- Timer and Logic Pro Integration Section ---
+# --- Timer Section ---
 st.markdown("---")
-st.subheader('⏱️ Practice Tools')
+st.caption("⏱️ Practice Timer")
 
-# Create two columns for Timer and Logic Pro
-timer_col, logic_col = st.columns([2, 1])
+# Initialize timer session state safely
+st.session_state.setdefault('timer_running', False)
+st.session_state.setdefault('timer_start_time', None)
+st.session_state.setdefault('timer_elapsed', 0)
 
-# Timer Section (Left Column)
-with timer_col:
-    st.markdown("**⏱️ Practice Timer**")
+# Timer controls - compact layout
+if not st.session_state.timer_running:
+    col1, col2, col3 = st.columns([1, 1, 1])
     
-    # Initialize timer session state safely
-    st.session_state.setdefault('timer_running', False)
-    st.session_state.setdefault('timer_start_time', None)
-    st.session_state.setdefault('timer_elapsed', 0)
-
-    # Timer controls - compact layout
-    if not st.session_state.timer_running:
-        col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
-        
-        with col1:
-            if st.button('▶️ Start', key='start_timer'):
-                st.session_state.timer_running = True
-                st.session_state.timer_start_time = time.time()
-                st.session_state.timer_elapsed = 0
-                st.rerun()
-        
-        with col2:
-            if st.button('🔄 Reset', key='reset_timer'):
-                st.session_state.timer_running = False
-                st.session_state.timer_start_time = None
-                st.session_state.timer_elapsed = 0
-                st.rerun()
-        
-        with col3:
-            if st.button('📝 Use', key='use_timer'):
-                if st.session_state.timer_elapsed > 0:
-                    st.session_state.timer_minutes = round_to_minutes(st.session_state.timer_elapsed)
-                    st.rerun()
-                else:
-                    st.warning("No timer data to use")
-        
-        with col4:
-            st.write("")  # Empty space for alignment
-    else:
-        col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
-        
-        with col1:
-            if st.button('⏸️ Stop', key='stop_timer'):
-                st.session_state.timer_running = False
-                # Safe timer calculation to prevent negative values
-                elapsed = max(0, time.time() - st.session_state.timer_start_time)
-                st.session_state.timer_elapsed = elapsed
-                st.rerun()
-        
-        with col2:
-            if st.button('🔄 Reset', key='reset_timer_running'):
-                st.session_state.timer_running = False
-                st.session_state.timer_start_time = None
-                st.session_state.timer_elapsed = 0
-                st.rerun()
-        
-        with col3:
-            if st.button('📝 Use', key='use_timer_running'):
-                if st.session_state.timer_elapsed > 0:
-                    st.session_state.timer_minutes = round_to_minutes(st.session_state.timer_elapsed)
-                    st.rerun()
-                else:
-                    st.warning("No timer data to use")
-        
-        with col4:
-            st.write("")  # Empty space for alignment
-
-    # Display timer (static, no auto-refresh to avoid app freezing)
-    if st.session_state.timer_running:
-        st.metric("⏱️ Timer Running", "⏱️ Running...")
-        st.caption("Timer is running - click 'Stop' when done")
-    elif st.session_state.timer_elapsed > 0:
-        st.metric("⏱️ Timer Stopped", format_time_minutes(st.session_state.timer_elapsed))
-        st.caption(f"📝 Click 'Use' to add {round_to_minutes(st.session_state.timer_elapsed)} minutes to your entry")
-    else:
-        st.metric("⏱️ Timer", "Ready")
-        st.caption("Click 'Start' to begin timing")
-
-# Logic Pro Integration (Right Column)
-with logic_col:
-    st.markdown("**🎹 Logic Pro**")
-    
-    # Check Logic Pro status
-    logic_info = get_logic_pro_info()
-
-    if logic_info["status"] == "success":
-        st.success("✅ Connected")
-        st.caption(f"Project: {logic_info['project_name']}")
-        
-        # Button to fill the manual entry form
-        if st.button('📝 Fill Name', key='fill_logic_name'):
-            st.session_state.project_name = logic_info['project_name']
+    with col1:
+        if st.button('▶️ Start', key='start_timer', use_container_width=True):
+            st.session_state.timer_running = True
+            st.session_state.timer_start_time = time.time()
+            st.session_state.timer_elapsed = 0
             st.rerun()
-        
-        st.caption("Click to fill project name")
-            
-    elif logic_info["status"] == "not_running":
-        st.info("💤 Not running")
-        st.caption("Start Logic Pro")
-        
-    elif logic_info["status"] == "no_project":
-        st.info("📁 No project")
-        st.caption("Open a project")
-        
-    else:
-        st.error("❌ Error")
-        st.caption(logic_info['message'])
+    
+    with col2:
+        st.write("")  # Empty space for alignment
+    
+    with col3:
+        if st.button('📝 Use', key='use_timer', use_container_width=True):
+            if st.session_state.timer_elapsed > 0:
+                st.session_state.timer_minutes = round_to_minutes(st.session_state.timer_elapsed)
+                st.rerun()
+            else:
+                st.warning("No timer data to use")
+else:
+    col1, col2, col3 = st.columns([1, 1, 1])
+    
+    with col1:
+        if st.button('⏸️ Stop', key='stop_timer', use_container_width=True):
+            st.session_state.timer_running = False
+            # Safe timer calculation to prevent negative values
+            elapsed = max(0, time.time() - st.session_state.timer_start_time)
+            st.session_state.timer_elapsed = elapsed
+            st.rerun()
+    
+    with col2:
+        st.write("")  # Empty space for alignment
+    
+    with col3:
+        if st.button('📝 Use', key='use_timer_running', use_container_width=True):
+            if st.session_state.timer_elapsed > 0:
+                st.session_state.timer_minutes = round_to_minutes(st.session_state.timer_elapsed)
+                st.rerun()
+            else:
+                st.warning("No timer data to use")
+
+# Display timer (static, no auto-refresh to avoid app freezing)
+if st.session_state.timer_running:
+    st.metric("⏱️ Timer Running", "⏱️ Running...")
+    st.caption("Timer is running - click 'Stop' when done")
+elif st.session_state.timer_elapsed > 0:
+    st.metric("⏱️ Timer Stopped", format_time_minutes(st.session_state.timer_elapsed))
+    st.caption(f"📝 Click 'Use' to add {round_to_minutes(st.session_state.timer_elapsed)} minutes to your entry")
+else:
+    st.metric("⏱️ Timer", "Ready")
+    st.caption("Click 'Start' to begin timing")
 
 # --- Manual Entry Section ---
 st.markdown("---")
@@ -310,17 +169,12 @@ st.subheader('✏️ Manual Entry')
 # Get recent exercises with BPM and prepare song selection
 recent_exercises_data = get_recent_exercises_with_bpm()
 
-# Initialize session state for project name safely
-st.session_state.setdefault('project_name', "")
-st.session_state.setdefault('song_input', st.session_state.project_name if st.session_state.project_name else "")
+# Initialize session state for song input safely
+st.session_state.setdefault('song_input', "")
 st.session_state.setdefault('bpm_input', 60)
 
 # Create options list with recent exercises
 exercise_options = [item['song'] for item in recent_exercises_data]
-
-# If Logic Pro project name is set and not in recent exercises, add it to options
-if st.session_state.project_name and st.session_state.project_name not in exercise_options:
-    exercise_options.insert(0, st.session_state.project_name)
 
 # Show recent songs as clickable buttons (outside the form)
 if recent_exercises_data:
